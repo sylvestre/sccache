@@ -128,7 +128,7 @@ endif()
 Build Requirements
 ------------------
 
-sccache is a [Rust](https://www.rust-lang.org/) program. Building it requires `cargo` (and thus `rustc`). sccache currently requires **Rust 1.43.0**. We recommend you install Rust via [Rustup](https://rustup.rs/).
+sccache is a [Rust](https://www.rust-lang.org/) program. Building it requires `cargo` (and thus `rustc`). sccache currently requires **Rust 1.48.0**. We recommend you install Rust via [Rustup](https://rustup.rs/).
 
 Build
 -----
@@ -191,6 +191,8 @@ You can also define a prefix that will be prepended to the keys of all cache obj
 ### Redis
 Set `SCCACHE_REDIS` to a [Redis](https://redis.io/) url in format `redis://[:<passwd>@]<hostname>[:port][/<db>]` to store the cache in a Redis instance. Redis can be configured as a LRU (least recently used) cache with a fixed maximum cache size. Set `maxmemory` and `maxmemory-policy` according to the [Redis documentation](https://redis.io/topics/lru-cache). The `allkeys-lru` policy which discards the *least recently accessed or modified* key fits well for the sccache use case.
 
+Redis over TLS is supported. Use the [`rediss://`](https://www.iana.org/assignments/uri-schemes/prov/rediss) url scheme (note `rediss` vs `redis`). Append `#insecure` the the url to disable hostname verification and accept self-signed certificates (dangerous!). Note that this also disables [SNI](https://en.wikipedia.org/wiki/Server_Name_Indication).
+
 ### Memcached
 Set `SCCACHE_MEMCACHED` to a [Memcached](https://memcached.org/) url in format `tcp://<hostname>:<port> ...` to store the cache in a Memcached instance.
 
@@ -206,6 +208,19 @@ environment variable to your connection string, and `SCCACHE_AZURE_BLOB_CONTAINE
 the container for you - you'll need to do that yourself.
 
 **Important:** The environment variables are only taken into account when the server starts, i.e. only on the first run.
+
+---
+
+Separating caches between invocations
+-------------------------------------
+
+In situations where several different compilation invocations
+should not reuse the cached results from each other,
+one can set `SCCACHE_C_CUSTOM_CACHE_BUSTER` to a unique value
+that'll be mixed into the hash.
+`MACOSX_DEPLOYMENT_TARGET` and `IPHONEOS_DEPLOYMENT_TARGET` variables
+already exhibit such reuse-suppression behaviour.
+There are currently no such variables for compiling Rust.
 
 ---
 
