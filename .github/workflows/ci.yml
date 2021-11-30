@@ -61,6 +61,8 @@ jobs:
             rustc: 1.48.0 # Oldest supported version, keep in sync with README.md
           - os: windows-2019
             rustc: nightly
+            allow_failure: true
+            extra_args: --features=unstable
           - os: windows-2019
             rustc: beta
     env:
