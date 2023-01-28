@@ -901,7 +901,7 @@ where
         .args(&parsed_args.dependency_args)
         .args(&parsed_args.common_args)
         .env_clear()
-        .envs(env_vars.iter().map(|&(ref k, ref v)| (k, v)))
+        .envs(env_vars.iter().map(|(k, v)| (k, v)))
         .current_dir(cwd);
     if parsed_args.depfile.is_some() && !parsed_args.msvc_show_includes {
         cmd.arg("-showIncludes");

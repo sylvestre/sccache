@@ -565,7 +565,7 @@ where
             "fetched {:?}",
             jc.outputs
                 .iter()
-                .map(|&(ref p, ref bs)| (p, bs.lens().to_string()))
+                .map(|(p, bs)| (p, bs.lens().to_string()))
                 .collect::<Vec<_>>()
         );
         let mut output_paths: Vec<PathBuf> = vec![];
@@ -593,7 +593,7 @@ where
             let len = output_data.lens().actual;
             let local_path = try_or_cleanup!(path_transformer
                 .to_local(&path)
-                .with_context(|| format!("unable to transform output path {}", path)));
+                .with_context(|| format!("unable to transform output path {path}")));
             output_paths.push(local_path);
             // Do this first so cleanup works correctly
             let local_path = output_paths.last().expect("nothing in vec after push");
@@ -828,8 +828,8 @@ impl PartialEq<CompileResult> for CompileResult {
             (&CompileResult::Error, &CompileResult::Error) => true,
             (&CompileResult::CacheHit(_), &CompileResult::CacheHit(_)) => true,
             (
-                &CompileResult::CacheMiss(ref m, ref dt, _, _),
-                &CompileResult::CacheMiss(ref n, ref dt2, _, _),
+                CompileResult::CacheMiss(m, dt, _, _),
+                CompileResult::CacheMiss(n, dt2, _, _),
             ) => m == n && dt == dt2,
             (&CompileResult::NotCacheable, &CompileResult::NotCacheable) => true,
             (&CompileResult::CompileFailed, &CompileResult::CompileFailed) => true,
@@ -1278,7 +1278,7 @@ mod test {
             s = &s[4..];
         }
         let prefix = String::from("blah: ");
-        let stdout = format!("{}{}\r\n", prefix, s);
+        let stdout = format!("{prefix}{s}\r\n");
         // Compiler detection output
         next_command(&creator, Ok(MockChild::new(exit_status(0), "\nmsvc\n", "")));
         // showincludes prefix detection output
@@ -1494,7 +1494,7 @@ LLVM version: 6.0",
         let results: Vec<_> = [11, 12]
             .iter()
             .map(|version| {
-                let output = format!("clang\n\"{}.0.0\"", version);
+                let output = format!("clang\n\"{version}.0.0\"");
                 next_command(&creator, Ok(MockChild::new(exit_status(0), output, "")));
                 let c = detect_compiler(
                     creator.clone(),
