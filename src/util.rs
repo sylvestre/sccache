@@ -78,7 +78,7 @@ impl Digest {
     pub async fn reader(path: PathBuf, pool: &tokio::runtime::Handle) -> Result<String> {
         pool.spawn_blocking(move || {
             let reader = File::open(&path)
-                .with_context(|| format!("Failed to open file for hashing: {:?}", path))?;
+                .with_context(|| format!("Failed to open file for hashing: {path:?}"))?;
             Digest::reader_sync(reader)
         })
         .await?
@@ -148,7 +148,7 @@ pub async fn hash_all_archives(
         pool.spawn_blocking(move || -> Result<String> {
             let mut m = Digest::new();
             let reader = File::open(&path)
-                .with_context(|| format!("Failed to open file for hashing: {:?}", path))?;
+                .with_context(|| format!("Failed to open file for hashing: {path:?}"))?;
             let mut archive = Archive::new(reader);
             while let Some(entry) = archive.next_entry() {
                 let entry = entry?;
@@ -581,7 +581,7 @@ pub fn daemonize() -> Result<()> {
         }
 
         unsafe {
-            let _ = writeln!(Stderr, "signal {} received", signum);
+            let _ = writeln!(Stderr, "signal {signum} received");
 
             // Configure the old handler and then resume the program. This'll
             // likely go on to create a runtime dump if one's configured to be

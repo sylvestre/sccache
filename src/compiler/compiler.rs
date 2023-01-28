@@ -403,7 +403,7 @@ where
                 ))
             }
         }
-        .with_context(|| format!("failed to store `{}` to cache", out_pretty))
+        .with_context(|| format!("failed to store `{out_pretty}` to cache"))
     }
 
     /// A descriptive string about the file that we're going to be producing.
@@ -553,8 +553,7 @@ where
             .map(move |res| ((job_id, server_id), res))
             .with_context(|| {
                 format!(
-                    "could not run distributed compilation job on {:?}",
-                    server_id
+                    "could not run distributed compilation job on {server_id:?}"
                 )
             })?;
 
@@ -631,7 +630,7 @@ where
                 ))
             } else {
                 // `{:#}` prints the error and the causes in a single line.
-                let errmsg = format!("{:#}", e);
+                let errmsg = format!("{e:#}");
                 warn!(
                     "[{}]: Could not perform distributed compile, falling back to local: {}",
                     out_pretty2, errmsg
@@ -812,9 +811,9 @@ impl fmt::Debug for CompileResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             CompileResult::Error => write!(f, "CompileResult::Error"),
-            CompileResult::CacheHit(ref d) => write!(f, "CompileResult::CacheHit({:?})", d),
+            CompileResult::CacheHit(ref d) => write!(f, "CompileResult::CacheHit({d:?})"),
             CompileResult::CacheMiss(ref m, ref dt, ref d, _) => {
-                write!(f, "CompileResult::CacheMiss({:?}, {:?}, {:?}, _)", d, m, dt)
+                write!(f, "CompileResult::CacheMiss({d:?}, {m:?}, {dt:?}, _)")
             }
             CompileResult::NotCacheable => write!(f, "CompileResult::NotCacheable"),
             CompileResult::CompileFailed => write!(f, "CompileResult::CompileFailed"),
@@ -2443,7 +2442,7 @@ mod test_dist {
             let outputs = outputs
                 .into_iter()
                 .map(|name| {
-                    let data = format!("some data in {}", name);
+                    let data = format!("some data in {name}");
                     let data = OutputData::try_from_reader(data.as_bytes()).unwrap();
                     (name, data)
                 })

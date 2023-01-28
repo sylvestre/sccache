@@ -22,10 +22,10 @@ impl Display for ArgParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             ArgParseError::UnexpectedEndOfArgs => "Unexpected end of args".into(),
-            ArgParseError::InvalidUnicode(s) => format!("String {:?} contained invalid unicode", s),
-            ArgParseError::Other(s) => format!("Arg-specific parsing failed: {}", s),
+            ArgParseError::InvalidUnicode(s) => format!("String {s:?} contained invalid unicode"),
+            ArgParseError::Other(s) => format!("Arg-specific parsing failed: {s}"),
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -45,13 +45,13 @@ impl Display for ArgToStringError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             ArgToStringError::FailedPathTransform(p) => {
-                format!("Path {:?} could not be transformed", p)
+                format!("Path {p:?} could not be transformed")
             }
             ArgToStringError::InvalidUnicode(s) => {
-                format!("String {:?} contained invalid unicode", s)
+                format!("String {s:?} contained invalid unicode")
             }
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 

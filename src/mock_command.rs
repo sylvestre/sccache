@@ -258,7 +258,7 @@ impl RunCommand for AsyncCommand {
         let mut inner = tokio::process::Command::from(inner);
         let child = inner
             .spawn()
-            .with_context(|| format!("failed to spawn {:?}", inner))?;
+            .with_context(|| format!("failed to spawn {inner:?}"))?;
 
         Ok(Child {
             inner: child,

@@ -120,7 +120,7 @@ fn parse_http_url(url: &str) -> Result<reqwest::Url> {
     use std::net::SocketAddr;
     let url = if let Ok(sa) = url.parse::<SocketAddr>() {
         warn!("Url {} has no scheme, assuming http", url);
-        reqwest::Url::parse(&format!("http://{}", sa))
+        reqwest::Url::parse(&format!("http://{sa}"))
     } else {
         reqwest::Url::parse(url)
     }?;

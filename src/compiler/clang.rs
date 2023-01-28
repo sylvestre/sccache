@@ -414,7 +414,7 @@ mod test {
             "-Xclang",
             "plugin.so"
         );
-        println!("A {:#?}", a);
+        println!("A {a:#?}");
         assert_eq!(
             ovec!["-Xclang", "-load", "-Xclang", "plugin.so"],
             a.common_args
@@ -560,7 +560,7 @@ mod test {
     #[test]
     fn test_parse_fplugin() {
         let a = parses!("-c", "foo.c", "-o", "foo.o", "-fplugin", "plugin.so");
-        println!("A {:#?}", a);
+        println!("A {a:#?}");
         assert_eq!(ovec!["-fplugin", "plugin.so"], a.common_args);
         assert_eq!(
             ovec![std::env::current_dir().unwrap().join("plugin.so")],

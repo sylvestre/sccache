@@ -77,7 +77,7 @@ impl fmt::Display for Error {
         match self {
             Error::FileTooLarge => write!(f, "File too large"),
             Error::FileNotInCache => write!(f, "File not in cache"),
-            Error::Io(ref e) => write!(f, "{}", e),
+            Error::Io(ref e) => write!(f, "{e}"),
         }
     }
 }

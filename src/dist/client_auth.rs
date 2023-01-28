@@ -264,8 +264,7 @@ mod code_grant_pkce {
                 MIN_TOKEN_VALIDITY_WARNING
             );
             eprintln!(
-                "sccache: Token retrieved expires in under {}",
-                MIN_TOKEN_VALIDITY_WARNING
+                "sccache: Token retrieved expires in under {MIN_TOKEN_VALIDITY_WARNING}"
             );
         }
         Ok(token)
@@ -398,8 +397,7 @@ mod implicit {
                         MIN_TOKEN_VALIDITY_WARNING
                     );
                     eprintln!(
-                        "sccache: Token retrieved expires in under {}",
-                        MIN_TOKEN_VALIDITY_WARNING
+                        "sccache: Token retrieved expires in under {MIN_TOKEN_VALIDITY_WARNING}"
                     );
                 }
                 // Deliberately in reverse order for a 'happens-before' relationship
@@ -444,10 +442,9 @@ fn error_code_response<E>(uri: hyper::Uri, e: E) -> hyper::Result<Response<Body>
 where
     E: std::fmt::Debug,
 {
-    let body = format!("{:?}", e);
+    let body = format!("{e:?}");
     eprintln!(
-        "sccache: Error during a request to {} on the client auth web server\n{}",
-        uri, body
+        "sccache: Error during a request to {uri} on the client auth web server\n{body}"
     );
     let len = body.len();
     let builder = Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR);
@@ -478,7 +475,7 @@ fn try_bind() -> Result<hyper::server::Builder<AddrIncoming>> {
             Err(ref e) if e.kind() == io::ErrorKind::ConnectionRefused => (),
             Err(e) => {
                 return Err(e)
-                    .with_context(|| format!("Failed to check {} is available for binding", addr))
+                    .with_context(|| format!("Failed to check {addr} is available for binding"))
             }
         }
 
@@ -493,7 +490,7 @@ fn try_bind() -> Result<hyper::server::Builder<AddrIncoming>> {
             {
                 continue
             }
-            Err(e) => return Err(e).with_context(|| format!("Failed to bind to {}", addr)),
+            Err(e) => return Err(e).with_context(|| format!("Failed to bind to {addr}")),
         }
     }
     bail!("Could not bind to any valid port: ({:?})", VALID_PORTS)
@@ -514,7 +511,7 @@ pub fn get_token_oauth2_code_grant_pkce(
 
     let port = server.local_addr().port();
 
-    let redirect_uri = format!("http://localhost:{}/redirect", port);
+    let redirect_uri = format!("http://localhost:{port}/redirect");
     let auth_state_value = Uuid::new_v4().as_simple().to_string();
     let (verifier, challenge) = code_grant_pkce::generate_verifier_and_challenge()?;
     code_grant_pkce::finish_url(
@@ -527,8 +524,7 @@ pub fn get_token_oauth2_code_grant_pkce(
 
     info!("Listening on http://localhost:{} with 1 thread.", port);
     println!(
-        "sccache: Please visit http://localhost:{} in your browser",
-        port
+        "sccache: Please visit http://localhost:{port} in your browser"
     );
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let (code_tx, code_rx) = mpsc::sync_channel(1);
@@ -568,14 +564,13 @@ pub fn get_token_oauth2_implicit(client_id: &str, mut auth_url: Url) -> Result<S
 
     let port = server.local_addr().port();
 
-    let redirect_uri = format!("http://localhost:{}/redirect", port);
+    let redirect_uri = format!("http://localhost:{port}/redirect");
     let auth_state_value = Uuid::new_v4().as_simple().to_string();
     implicit::finish_url(client_id, &mut auth_url, &redirect_uri, &auth_state_value);
 
     info!("Listening on http://localhost:{} with 1 thread.", port);
     println!(
-        "sccache: Please visit http://localhost:{} in your browser",
-        port
+        "sccache: Please visit http://localhost:{port} in your browser"
     );
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let (token_tx, token_rx) = mpsc::sync_channel(1);

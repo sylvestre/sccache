@@ -749,7 +749,7 @@ pub fn parse_arguments(
     if multiple_input {
         cannot_cache!(
             "multiple input files",
-            format!("{:?}", multiple_input_files)
+            format!("{multiple_input_files:?}")
         );
     }
     let (input, language) = match input_arg {
@@ -921,17 +921,17 @@ where
     let output = run_input_output(cmd, None).await?;
 
     let parsed_args = &parsed_args;
-    if let (Some(obj), &Some(ref depfile)) = (parsed_args.outputs.get("obj"), &parsed_args.depfile)
+    if let (Some(obj), Some(depfile)) = (parsed_args.outputs.get("obj"), &parsed_args.depfile)
     {
         let objfile = &obj.path;
         let f = File::create(cwd.join(depfile))?;
         let mut f = BufWriter::new(f);
 
         encode_path(&mut f, objfile)
-            .with_context(|| format!("Couldn't encode objfile filename: '{:?}'", objfile))?;
+            .with_context(|| format!("Couldn't encode objfile filename: '{objfile:?}'"))?;
         write!(f, ": ")?;
         encode_path(&mut f, &parsed_args.input)
-            .with_context(|| format!("Couldn't encode input filename: '{:?}'", objfile))?;
+            .with_context(|| format!("Couldn't encode input filename: '{objfile:?}'"))?;
         write!(f, " ")?;
         let process::Output {
             status,
@@ -947,7 +947,7 @@ where
                 let dep = normpath(line[includes_prefix.len()..].trim());
                 trace!("included: {}", dep);
                 if deps.insert(dep.clone()) && !dep.contains(' ') {
-                    write!(f, "{} ", dep)?;
+                    write!(f, "{dep} ")?;
                 }
                 if !parsed_args.msvc_show_includes {
                     continue;
@@ -966,7 +966,7 @@ where
         sorted.sort();
         for dep in sorted {
             if !dep.contains(' ') {
-                writeln!(f, "{}:", dep)?;
+                writeln!(f, "{dep}:")?;
             }
         }
         Ok(process::Output {
@@ -1082,7 +1082,7 @@ mod test {
         if s.starts_with("\\\\?\\") {
             s = &s[4..];
         }
-        let stdout = format!("blah: {}\r\n", s);
+        let stdout = format!("blah: {s}\r\n");
         let stderr = String::from("some\r\nstderr\r\n");
         next_command(&creator, Ok(MockChild::new(exit_status(0), stdout, stderr)));
         assert_eq!(
@@ -1461,7 +1461,7 @@ mod test {
                 "foo.c",
                 "/Fofoo.obj",
                 "/experimental:external",
-                format!("/external:W{}", n)
+                format!("/external:W{n}")
             ];
             let ParsedArguments {
                 input,
@@ -1491,7 +1491,7 @@ mod test {
             assert!(preprocessor_args.is_empty());
             assert_eq!(
                 common_args,
-                ovec!["/experimental:external", format!("/external:W{}", n)]
+                ovec!["/experimental:external", format!("/external:W{n}")]
             );
             assert!(!msvc_show_includes);
         }

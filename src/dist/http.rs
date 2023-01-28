@@ -208,7 +208,7 @@ pub mod urls {
     }
     pub fn scheduler_job_state(scheduler_url: &reqwest::Url, job_id: JobId) -> reqwest::Url {
         scheduler_url
-            .join(&format!("/api/v1/scheduler/job_state/{}", job_id))
+            .join(&format!("/api/v1/scheduler/job_state/{job_id}"))
             .expect("failed to create job state url")
     }
     pub fn scheduler_status(scheduler_url: &reqwest::Url) -> reqwest::Url {

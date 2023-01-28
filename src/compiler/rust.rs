@@ -255,7 +255,7 @@ where
     let parsed = pool
         .spawn_blocking(move || {
             parse_dep_file(&dep_file, &cwd)
-                .with_context(|| format!("Failed to parse dep info for {}", name2))
+                .with_context(|| format!("Failed to parse dep info for {name2}"))
         })
         .await?;
 
@@ -416,7 +416,7 @@ impl Rust {
             let sysroot = PathBuf::from(outstr.trim_end());
             let libs_path = sysroot.join(LIBS_DIR);
             let mut libs = fs::read_dir(&libs_path)
-                .with_context(|| format!("Failed to list rustc sysroot: `{:?}`", libs_path))?
+                .with_context(|| format!("Failed to list rustc sysroot: `{libs_path:?}`"))?
                 .filter_map(|e| {
                     e.ok().and_then(|e| {
                         e.file_type().ok().and_then(|t| {
@@ -808,7 +808,7 @@ impl IntoArg for ArgLinkLibrary {
     }
     fn into_arg_string(self, _transformer: PathTransformerFn<'_>) -> ArgToStringResult {
         let ArgLinkLibrary { kind, name } = self;
-        Ok(format!("{}={}", kind, name))
+        Ok(format!("{kind}={name}"))
     }
 }
 
@@ -1238,9 +1238,9 @@ fn parse_arguments(arguments: &[OsString], cwd: &Path) -> CompilerArguments<Pars
         .filter_map(|name| {
             for path in static_link_paths.iter() {
                 for f in &[
-                    format_args!("lib{}.a", name),
-                    format_args!("{}.lib", name),
-                    format_args!("{}.a", name),
+                    format_args!("lib{name}.a"),
+                    format_args!("{name}.lib"),
+                    format_args!("{name}.a"),
                 ] {
                     let lib_path = path.join(fmt::format(*f));
                     if lib_path.exists() {
@@ -1654,7 +1654,7 @@ impl Compilation for RustCompilation {
             // We can't rely on the packaged toolchain necessarily having the same default target triple
             // as us (typically host triple), so make sure to always explicitly specify a target.
             if !saw_target {
-                dist_arguments.push(format!("--target={}", host))
+                dist_arguments.push(format!("--target={host}"))
             }
 
             // Convert the paths of some important environment variables
@@ -2083,7 +2083,7 @@ impl OutputsRewriter for RustOutputsRewriter {
                         deps = re.replace_all(&deps, local_path_str).into_owned();
                     }
                     if !extra_inputs.is_empty() {
-                        deps = deps.replace(": ", &format!(":{} ", extra_input_str));
+                        deps = deps.replace(": ", &format!(":{extra_input_str} "));
                     }
                     // Write the depinfo file
                     let f =
@@ -3033,7 +3033,7 @@ proc_macro false
             let mut f = File::create(dep_info_path)?;
             writeln!(f, "blah: {}", sorted_deps.iter().join(" "))?;
             for d in sorted_deps.iter() {
-                writeln!(f, "{}:", d)?;
+                writeln!(f, "{d}:")?;
             }
             Ok(MockChild::new(exit_status(0), "", ""))
         });
@@ -3190,12 +3190,12 @@ proc_macro false
         // Just use empty files for sources.
         {
             let src = &"foo.rs";
-            let s = format!("Failed to create {}", src);
+            let s = format!("Failed to create {src}");
             f.touch(src).expect(&s);
         }
         // as well as externs
         for e in parsed_args.externs.iter() {
-            let s = format!("Failed to create {:?}", e);
+            let s = format!("Failed to create {e:?}");
             f.touch(e.to_str().unwrap()).expect(&s);
         }
         pre_func(f.tempdir.path()).expect("Failed to execute pre_func");

@@ -491,7 +491,7 @@ where
     if multiple_input {
         cannot_cache!(
             "multiple input files",
-            format!("{:?}", multiple_input_files)
+            format!("{multiple_input_files:?}")
         );
     }
     let input = match input_arg {
@@ -635,7 +635,7 @@ fn preprocess_cmd<T>(
         .filter(|&arg| arg.ne(ARCH_FLAG))
         .filter_map(|arg| {
             arg.to_str()
-                .map(|arg_string| format!("-D__{}__=1", arg_string).into())
+                .map(|arg_string| format!("-D__{arg_string}__=1").into())
         })
         .collect::<Vec<OsString>>();
 

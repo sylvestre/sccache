@@ -382,7 +382,7 @@ impl DistClientContainer {
         let cached_config = config::CachedConfig::reload()?;
         cached_config
             .with(|c| c.dist.auth_tokens.get(auth_url).map(String::to_owned))
-            .with_context(|| format!("token for url {} not present in cached config", auth_url))
+            .with_context(|| format!("token for url {auth_url} not present in cached config"))
     }
 }
 
@@ -1278,7 +1278,7 @@ where
                             Ok(HttpClientError(msg)) => {
                                 me.dist_client.reset_state().await;
                                 let errmsg =
-                                    format!("[{:?}] http error status: {}", out_pretty, msg);
+                                    format!("[{out_pretty:?}] http error status: {msg}");
                                 error!("{}", errmsg);
                                 res.retcode = Some(1);
                                 res.stderr = errmsg.as_bytes().to_vec();
@@ -1289,10 +1289,10 @@ where
                                 error!("[{:?}] fatal error: {}", out_pretty, err);
 
                                 let mut error = "sccache: encountered fatal error\n".to_string();
-                                let _ = writeln!(error, "sccache: error: {}", err);
+                                let _ = writeln!(error, "sccache: error: {err}");
                                 for e in err.chain() {
                                     error!("[{:?}] \t{}", out_pretty, e);
-                                    let _ = writeln!(error, "sccache: caused by: {}", e);
+                                    let _ = writeln!(error, "sccache: caused by: {e}");
                                 }
                                 stats.cache_errors.increment(&kind);
                                 //TODO: figure out a better way to communicate this?
@@ -1596,11 +1596,7 @@ impl ServerStats {
             counts.sort_by(|(_, c1), (_, c2)| c1.cmp(c2).reverse());
             for (reason, count) in counts {
                 println!(
-                    "{:<name_width$} {:>stat_width$}",
-                    reason,
-                    count,
-                    name_width = name_width,
-                    stat_width = stat_width
+                    "{reason:<name_width$} {count:>stat_width$}"
                 );
             }
             println!();
@@ -1627,16 +1623,11 @@ impl ServerInfo {
                 let (val, suffix) = match NumberPrefix::binary(val as f64) {
                     NumberPrefix::Standalone(bytes) => (bytes.to_string(), "bytes".to_string()),
                     NumberPrefix::Prefixed(prefix, n) => {
-                        (format!("{:.0}", n), format!("{}B", prefix))
+                        (format!("{n:.0}"), format!("{prefix}B"))
                     }
                 };
                 println!(
-                    "{:<name_width$} {:>stat_width$} {}",
-                    name,
-                    val,
-                    suffix,
-                    name_width = name_width,
-                    stat_width = stat_width
+                    "{name:<name_width$} {val:>stat_width$} {suffix}"
                 );
             }
         }

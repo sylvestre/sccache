@@ -74,7 +74,7 @@ fn compile_cmdline<T: AsRef<OsStr>>(
 ) -> Vec<OsString> {
     let mut arg = match compiler {
         "gcc" | "clang" | "clang++" => vec_from!(OsString, exe.as_ref(), "-c", input, "-o", output),
-        "cl.exe" => vec_from!(OsString, exe, "-c", input, format!("-Fo{}", output)),
+        "cl.exe" => vec_from!(OsString, exe, "-c", input, format!("-Fo{output}")),
         _ => panic!("Unsupported compiler: {}", compiler),
     };
     if !extra_args.is_empty() {
@@ -200,9 +200,7 @@ fn test_msvc_deps(compiler: Compiler, tempdir: &Path) {
     f.read_to_string(&mut buf).expect("Failed to read dep file");
     let lines: Vec<_> = buf.lines().map(|l| l.trim_end()).collect();
     let expected = format!(
-        "{output}: {input}\n{input}:\n",
-        output = OUTPUT,
-        input = INPUT
+        "{OUTPUT}: {INPUT}\n{INPUT}:\n"
     );
     let expected_lines: Vec<_> = expected.lines().collect();
     assert_eq!(lines, expected_lines);
@@ -423,7 +421,7 @@ fn test_clang_multicall(compiler: Compiler, tempdir: &Path) {
         exe,
         env_vars,
     } = compiler;
-    println!("test_clang_multicall: {}", name);
+    println!("test_clang_multicall: {name}");
     // Compile a source file.
     copy_to_tempdir(&[INPUT_CLANG_MULTICALL], tempdir);
 
@@ -448,8 +446,8 @@ fn test_clang_cache_whitespace_normalization(compiler: Compiler, tempdir: &Path,
         exe,
         env_vars,
     } = compiler;
-    println!("run_sccache_command_test: {}", name);
-    println!("expecting hit: {}", hit);
+    println!("run_sccache_command_test: {name}");
+    println!("expecting hit: {hit}");
     // Compile a source file.
     copy_to_tempdir(&[INPUT_WITH_WHITESPACE, INPUT_WITH_WHITESPACE_ALT], tempdir);
     zero_stats();

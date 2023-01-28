@@ -450,7 +450,7 @@ fn handle_compile_finished(
         trace!("compiler exited with status {}", ret);
         Ok(ret)
     } else if let Some(signal) = response.signal {
-        println!("sccache: Compiler killed by signal {}", signal);
+        println!("sccache: Compiler killed by signal {signal}");
         Ok(-2)
     } else {
         println!("sccache: Missing compiler exit status!");
@@ -538,7 +538,7 @@ where
 
     Ok(status.code().unwrap_or_else(|| {
         if let Some(sig) = status_signal(status) {
-            println!("sccache: Compile terminated by signal {}", sig);
+            println!("sccache: Compile terminated by signal {sig}");
         }
         // Arbitrary.
         2
@@ -612,7 +612,7 @@ pub fn run_command(cmd: Command) -> Result<i32> {
             match startup {
                 ServerStartup::Ok { port } => {
                     if port != DEFAULT_PORT {
-                        println!("sccache: Listening on port {}", port);
+                        println!("sccache: Listening on port {port}");
                     }
                 }
                 ServerStartup::TimedOut => bail!("Timed out waiting for server startup"),
