@@ -20,6 +20,10 @@ use std::str;
 
 use crate::errors::*;
 
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+pub use self::toolchain_imp::*;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use self::toolchain_imp::*;
 
 pub trait ToolchainPackager: Send {
