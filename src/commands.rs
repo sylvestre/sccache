@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use crate::cache::{Cache, CacheRead, CacheWrite, FileObjectSource, Storage, storage_from_config};
+use crate::cache::{Cache, CacheWrite, FileObjectSource, Storage, storage_from_config};
 use crate::client::{ServerConnection, connect_to_server, connect_with_retry};
 use crate::cmdline::{Command, StatsFormat};
 use crate::compiler::{CacheControl, Cacheable, ColorMode, CompilerArguments, get_compiler_info};
@@ -33,7 +33,7 @@ use fs_err as fs;
 use log::Level::Trace;
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::io::{self, Cursor, IsTerminal, Write};
+use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -737,28 +737,40 @@ where
         .collect();
 
     // Step 4: Ask the server for a cached result.
-    let cache_response =
-        conn.request(Request::CacheGet(CacheGetRequest { key: key.clone() }))?;
+    // The server extracts artifacts directly to `outputs` paths on a hit, so
+    // only stdout/stderr cross the IPC channel – no large data transfer.
+    let cache_response = conn.request(Request::CacheGet(CacheGetRequest {
+        key: key.clone(),
+        output_paths: outputs.clone(),
+    }))?;
 
     match cache_response {
         // ── Step 5a: Cache hit ──────────────────────────────────────────────
-        Response::CacheGet(CacheGetResponse::Hit(bytes)) => {
+        Response::CacheGet(CacheGetResponse::Hit {
+            stdout: cached_stdout,
+            stderr: cached_stderr,
+        }) => {
             debug!("client-side cache hit for key {}", key);
-            let mut entry = CacheRead::from(Cursor::new(bytes))?;
-            // Extract stdio before consuming entry.
-            let cached_stdout = entry.get_stdout();
-            let cached_stderr = entry.get_stderr();
-            // Extract compiled artifacts to their final paths.
-            runtime.block_on(entry.extract_objects(outputs, &pool))?;
+            // Artifacts already extracted by the server; just forward stdio.
             stdout.write_all(&cached_stdout)?;
             stderr.write_all(&cached_stderr)?;
             Ok(0)
         }
 
-        // ── Step 5b: Cache miss ─────────────────────────────────────────────
-        Response::CacheGet(CacheGetResponse::Miss)
-        | Response::CacheGet(CacheGetResponse::Error(_)) => {
-            debug!("client-side cache miss for key {}", key);
+        // ── Step 5b: Cache miss or server-side error ────────────────────────
+        cache_miss_or_error => {
+            match &cache_miss_or_error {
+                Response::CacheGet(CacheGetResponse::Miss) => {
+                    debug!("client-side cache miss for key {}", key);
+                }
+                Response::CacheGet(CacheGetResponse::Error(msg)) => {
+                    debug!(
+                        "client-side cache error for key {} (treating as miss): {}",
+                        key, msg
+                    );
+                }
+                other => bail!("unexpected response from server for CacheGet: {:?}", other),
+            }
 
             // Build the concrete compile command.
             let mut path_transformer = crate::dist::PathTransformer::new();
@@ -782,32 +794,21 @@ where
             let exit_code = output.status.code().unwrap_or(-1);
 
             // If compilation succeeded and the result is cacheable, store it.
+            // The server reads the output files from disk directly.
             if output.status.success() && cacheable == Cacheable::Yes {
-                match runtime.block_on(CacheWrite::from_objects(outputs, &pool)) {
-                    Ok(mut entry) => {
-                        let _ = entry.put_stdout(&output.stdout);
-                        let _ = entry.put_stderr(&output.stderr);
-                        match entry.finish() {
-                            Ok(bytes) => {
-                                // Best-effort: ignore errors storing to cache.
-                                let _ = conn.request(Request::CachePut(CachePutRequest {
-                                    key,
-                                    entry: bytes,
-                                }));
-                            }
-                            Err(e) => debug!("failed to serialise cache entry: {}", e),
-                        }
-                    }
-                    Err(e) => debug!("failed to create cache entry: {}", e),
-                }
+                // Best-effort: ignore errors storing to cache.
+                let _ = conn.request(Request::CachePut(CachePutRequest {
+                    key,
+                    output_paths: outputs,
+                    stdout: output.stdout.clone(),
+                    stderr: output.stderr.clone(),
+                }));
             }
 
             stdout.write_all(&output.stdout)?;
             stderr.write_all(&output.stderr)?;
             Ok(exit_code)
         }
-
-        _ => bail!("unexpected response from server for CacheGet"),
     }
 }
 

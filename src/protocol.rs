@@ -1,3 +1,4 @@
+use crate::cache::FileObjectSource;
 use crate::compiler::{ColorMode, PreprocessorCacheEntry};
 use crate::server::{DistInfo, ServerInfo};
 use serde::{Deserialize, Serialize};
@@ -114,19 +115,32 @@ pub struct Compile {
 }
 
 /// Request to get a cache entry by key.
+///
+/// The server extracts output artifacts directly to `output_paths` on a hit,
+/// so no large data ever crosses the IPC channel.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CacheGetRequest {
     /// The cache key to look up.
     pub key: String,
+    /// Where to extract output artifacts on a cache hit.
+    pub output_paths: Vec<FileObjectSource>,
 }
 
 /// Request to store a cache entry.
+///
+/// The server reads the output artifacts from `output_paths` directly from
+/// disk (client and server share the same filesystem), so no large data
+/// crosses the IPC channel.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CachePutRequest {
     /// The cache key to store under.
     pub key: String,
-    /// The cache entry data (serialized zip format).
-    pub entry: Vec<u8>,
+    /// Paths to the output artifacts the server should pack into the entry.
+    pub output_paths: Vec<FileObjectSource>,
+    /// The compiler's stdout.
+    pub stdout: Vec<u8>,
+    /// The compiler's stderr.
+    pub stderr: Vec<u8>,
 }
 
 /// Request to store a preprocessor cache entry.
@@ -139,11 +153,17 @@ pub struct PreprocessorCachePutRequest {
 }
 
 /// Response for a cache get request.
+///
+/// On a hit the server has already extracted the artifacts to the paths
+/// supplied in the request; the response carries only stdout/stderr.
 #[derive(Serialize, Deserialize, Debug)]
 pub enum CacheGetResponse {
-    /// Cache hit with the entry data (serialized zip format).
-    Hit(Vec<u8>),
-    /// Cache miss - entry not found.
+    /// Cache hit – artifacts extracted to the requested paths.
+    Hit {
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
+    /// Cache miss – entry not found.
     Miss,
     /// Error occurred during cache lookup.
     Error(String),
