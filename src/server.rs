@@ -1011,7 +1011,12 @@ where
     where
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        // Default to 256 MB to accommodate large cache entries (e.g. Rust rlib files).
+        // The original 8 MB default is too small for client-side compilation mode where
+        // full cache entries are transferred over the IPC channel.
+        const DEFAULT_MAX_FRAME_LENGTH: usize = 256 * 1024 * 1024;
         let mut builder = length_delimited::Builder::new();
+        builder.max_frame_length(DEFAULT_MAX_FRAME_LENGTH);
         if let Ok(max_frame_length_str) = env::var("SCCACHE_MAX_FRAME_LENGTH") {
             if let Ok(max_frame_length) = max_frame_length_str.parse::<usize>() {
                 builder.max_frame_length(max_frame_length);
