@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use crate::cache::{Cache, CacheWrite, FileObjectSource, Storage, storage_from_config};
 use crate::client::{ServerConnection, connect_to_server, connect_with_retry};
 use crate::cmdline::{Command, StatsFormat};
@@ -26,6 +25,7 @@ use crate::protocol::{
 };
 use crate::server::{self, DistInfo, ServerInfo, ServerStartup, ServerStats};
 use crate::util::{daemonize, run_input_output};
+use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use fs::{File, OpenOptions};
 use fs_err as fs;
@@ -33,11 +33,11 @@ use log::Level::Trace;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, IsTerminal, Write};
-use std::sync::Arc;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process;
+use std::sync::Arc;
 use std::time::Duration;
 use strip_ansi_escapes::Writer;
 use tokio::io::AsyncReadExt;
@@ -770,7 +770,8 @@ where
                 }
                 other => bail!(
                     "unexpected response from server for CacheGet (key={}): {:?}",
-                    key, other
+                    key,
+                    other
                 ),
             }
 
@@ -805,10 +806,11 @@ where
                     stdout: output.stdout.clone(),
                     stderr: output.stderr.clone(),
                 })) {
-                    Ok(Response::CachePut(
-                        crate::protocol::CachePutResponse::Error(msg),
-                    )) => {
-                        debug!("server failed to store cache entry for key {}: {}", key, msg);
+                    Ok(Response::CachePut(crate::protocol::CachePutResponse::Error(msg))) => {
+                        debug!(
+                            "server failed to store cache entry for key {}: {}",
+                            key, msg
+                        );
                     }
                     Err(e) => {
                         debug!("failed to store cache entry for key {}: {:#}", key, e);
