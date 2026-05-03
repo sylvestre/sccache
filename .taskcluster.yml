@@ -1,0 +1,96 @@
+version: 1
+reporting: checks-v1
+policy:
+  pullRequests: collaborators
+tasks:
+  $let:
+    head_repo:
+      $if: 'tasks_for == "github-pull-request"'
+      then: ${event.pull_request.head.repo.clone_url}
+      else: ${event.repository.clone_url}
+    head_rev:
+      $if: 'tasks_for == "github-pull-request"'
+      then: ${event.pull_request.head.sha}
+      else: ${event.after}
+    head_branch:
+      $if: 'tasks_for == "github-pull-request"'
+      then: ${event.pull_request.head.ref}
+      else:
+        $if: 'tasks_for == "github-push"'
+        then: ${event.ref}
+        else: ''
+    owner:
+      $if: 'tasks_for == "github-pull-request"'
+      then: ${event.pull_request.user.login}@users.noreply.github.com
+      else: ${event.sender.login}@users.noreply.github.com
+    # Pinned Firefox revision. Bump periodically (and when this job
+    # breaks because gecko's build system changed). Using the
+    # mozilla-firefox/firefox git mirror so we can shallow-clone.
+    firefox_rev: 'main'
+  in:
+    $match:
+      'tasks_for == "github-push" && event.ref == "refs/heads/main"':
+        $let:
+          run_task: true
+        in: &task
+          taskId: {$eval: as_slugid("firefox-build")}
+          taskGroupId: {$eval: as_slugid("firefox-build-group")}
+          schedulerId: taskcluster-github
+          created: {$fromNow: ''}
+          deadline: {$fromNow: '2 hours'}
+          expires: {$fromNow: '30 days'}
+          # NOTE: provisionerId/workerType must match a community-tc
+          # worker pool that has been granted to this repo. See the
+          # "Coordination needed" section in the plan: this is set
+          # up via mozilla/community-tc-config.
+          provisionerId: proj-sccache
+          workerType: ci
+          scopes:
+            - $if: 'tasks_for == "github-pull-request"'
+              then: assume:repo:github.com/mozilla/sccache:pull-request
+              else: assume:repo:github.com/mozilla/sccache:branch:${head_branch}
+          payload:
+            maxRunTime: 3600
+            image: 'ubuntu:24.04'
+            env:
+              HEAD_REPOSITORY: ${head_repo}
+              HEAD_REV: ${head_rev}
+              HEAD_BRANCH: ${head_branch}
+              MOZ_FIREFOX_REV: ${firefox_rev}
+              RUST_BACKTRACE: '1'
+              DEBIAN_FRONTEND: noninteractive
+            command:
+              - /bin/bash
+              - -cx
+              - >-
+                apt-get update &&
+                apt-get install -y --no-install-recommends ca-certificates git &&
+                git clone "$HEAD_REPOSITORY" /sccache &&
+                cd /sccache &&
+                git checkout "$HEAD_REV" &&
+                exec ci/taskcluster/firefox-build.sh
+            artifacts:
+              public/sccache-stats.txt:
+                type: file
+                path: /builds/worker/artifacts/sccache-stats.txt
+                expires: {$fromNow: '30 days'}
+              public/firefox-config.log:
+                type: file
+                path: /builds/worker/artifacts/firefox-config.log
+                expires: {$fromNow: '30 days'}
+              public/firefox-build.log:
+                type: file
+                path: /builds/worker/artifacts/firefox-build.log
+                expires: {$fromNow: '30 days'}
+          metadata:
+            name: sccache - Firefox build smoke test
+            description: |
+              Builds sccache from this revision and runs `./mach configure`
+              plus a narrow `./mach build` target against a pinned Firefox
+              tree, with sccache wired in as `--with-ccache` and
+              `RUSTC_WRAPPER`. Asserts via `sccache --show-stats` that
+              compiles flowed through sccache.
+            owner: ${owner}
+            source: ${head_repo}
+      'tasks_for == "github-pull-request" && (event.action == "opened" || event.action == "reopened" || event.action == "synchronize")':
+        *task
