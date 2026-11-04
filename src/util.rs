@@ -39,6 +39,28 @@ pub const BASE64_URL_SAFE_ENGINE: base64::engine::GeneralPurpose =
 
 pub const HASH_BUFFER_SIZE: usize = 128 * 1024;
 
+/// The largest message the client and the daemon exchange, from
+/// `SCCACHE_MAX_FRAME_LENGTH` or else the default of the framing codec.
+pub fn max_frame_length() -> usize {
+    static MAX_FRAME_LENGTH: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        let default = tokio_util::codec::LengthDelimitedCodec::new().max_frame_length();
+        match std::env::var("SCCACHE_MAX_FRAME_LENGTH") {
+            Ok(value) => value.parse().unwrap_or_else(|_| {
+                warn!("Content of SCCACHE_MAX_FRAME_LENGTH is not a valid number, using default");
+                default
+            }),
+            Err(_) => default,
+        }
+    });
+    *MAX_FRAME_LENGTH
+}
+
+/// Whether a cache entry of `len` bytes fits in a message between the client
+/// and the daemon, leaving room for what the message wraps around it.
+pub fn fits_in_frame(len: usize) -> bool {
+    len.saturating_add(1024) <= max_frame_length()
+}
+
 /// Reads `reader` to the end, passing each chunk read to `f`.
 ///
 /// Goes through `std::io::copy`, whose buffer lives on the stack and is not

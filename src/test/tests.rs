@@ -500,3 +500,130 @@ fn test_cli_rmeta_notification_delivery_after_daemon_disconnect() {
         "stderr written in total"
     );
 }
+
+/// A storage whose entries are all too large to send to a client-side mode
+/// process in one message.
+struct OversizedStorage;
+
+#[async_trait::async_trait]
+impl crate::cache::Storage for OversizedStorage {
+    async fn get(&self, _key: &str) -> crate::errors::Result<crate::cache::Cache> {
+        Ok(crate::cache::Cache::Miss)
+    }
+    async fn put(
+        &self,
+        _key: &str,
+        _entry: crate::cache::CacheWrite,
+    ) -> crate::errors::Result<Duration> {
+        Ok(Duration::ZERO)
+    }
+    async fn get_raw(&self, _key: &str) -> crate::errors::Result<Option<bytes::Bytes>> {
+        Ok(Some(vec![0; crate::util::max_frame_length()].into()))
+    }
+    async fn get_preprocessor_cache_entry(
+        &self,
+        _key: &str,
+    ) -> crate::errors::Result<Option<Box<dyn crate::lru_disk_cache::ReadSeek>>> {
+        Ok(Some(Box::new(Cursor::new(vec![
+            0;
+            crate::util::max_frame_length()
+        ]))))
+    }
+    fn location(&self) -> String {
+        "Oversized Storage".to_string()
+    }
+    async fn current_size(&self) -> crate::errors::Result<Option<u64>> {
+        Ok(None)
+    }
+    async fn max_size(&self) -> crate::errors::Result<Option<u64>> {
+        Ok(None)
+    }
+    fn preprocessor_cache_mode_config(&self) -> PreprocessorCacheModeConfig {
+        PreprocessorCacheModeConfig::default()
+    }
+    fn basedirs(&self) -> &[Vec<u8>] {
+        &[]
+    }
+}
+
+fn run_oversized_server_thread() -> (
+    crate::net::SocketAddr,
+    Sender<ServerMessage>,
+    thread::JoinHandle<()>,
+) {
+    let (tx, rx) = mpsc::channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle = thread::spawn(move || {
+        let runtime = Runtime::new().unwrap();
+        let srv = SccacheServer::new(
+            0,
+            runtime,
+            Client::new(),
+            DistClientContainer::new_disabled(),
+            Arc::new(OversizedStorage),
+            CacheMode::ReadWrite,
+        )
+        .unwrap();
+        let srv: SccacheServer<_, Arc<Mutex<MockCommandCreator>>> = srv;
+        tx.send(srv.local_addr().unwrap()).unwrap();
+        srv.run(shutdown_rx).unwrap();
+    });
+    (rx.recv().unwrap(), shutdown_tx, handle)
+}
+
+/// Send `request` on `conn` from another thread, failing the test rather than
+/// hanging when no response ever comes.
+fn request_with_timeout(
+    mut conn: crate::client::ServerConnection,
+    request: crate::protocol::Request,
+) -> (
+    crate::client::ServerConnection,
+    crate::errors::Result<crate::protocol::Response>,
+) {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let resp = conn.request(request);
+        tx.send((conn, resp)).ok();
+    });
+    rx.recv_timeout(Duration::from_secs(30))
+        .expect("the daemon neither responded nor closed the connection")
+}
+
+#[test]
+fn test_storage_get_raw_too_large_for_a_message_is_a_miss() {
+    let (addr, sender, child) = run_oversized_server_thread();
+    let conn = connect_to_server(&addr).unwrap();
+    let (conn, resp) = request_with_timeout(
+        conn,
+        crate::protocol::Request::StorageGetRaw {
+            key: "key".to_owned(),
+        },
+    );
+    assert!(matches!(
+        resp.unwrap(),
+        crate::protocol::Response::StorageGetRaw(None)
+    ));
+    // The connection still works.
+    let (conn, resp) = request_with_timeout(conn, crate::protocol::Request::GetStats);
+    assert!(matches!(resp.unwrap(), crate::protocol::Response::Stats(_)));
+    drop(conn);
+    sender.send(ServerMessage::Shutdown).ok().unwrap();
+    child.join().unwrap();
+}
+
+#[test]
+fn test_daemon_closes_the_connection_when_a_response_fails_to_send() {
+    let (addr, sender, child) = run_oversized_server_thread();
+    let conn = connect_to_server(&addr).unwrap();
+    // A response the daemon can't send, but still tries to.
+    let (conn, resp) = request_with_timeout(
+        conn,
+        crate::protocol::Request::StorageGetPreprocessorEntry {
+            key: "key".to_owned(),
+        },
+    );
+    assert!(resp.is_err());
+    drop(conn);
+    sender.send(ServerMessage::Shutdown).ok().unwrap();
+    child.join().unwrap();
+}

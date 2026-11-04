@@ -121,6 +121,13 @@ impl Storage for IpcStorage {
     }
 
     async fn put_raw(&self, key: &str, data: Bytes) -> Result<Duration> {
+        // The daemon would drop the connection on a message it can't take.
+        if !crate::util::fits_in_frame(data.len()) {
+            bail!(
+                "IpcStorage::put_raw: the {} bytes of {key} don't fit in SCCACHE_MAX_FRAME_LENGTH",
+                data.len()
+            );
+        }
         let resp = self
             .rpc(Request::StoragePutRaw {
                 key: key.to_owned(),

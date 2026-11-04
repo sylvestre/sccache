@@ -1024,6 +1024,14 @@ where
                 Request::StorageGetRaw { key } => {
                     debug!("handle_client: storage_get_raw key={}", key);
                     let resp = match me.storage.get_raw(&key).await {
+                        Ok(Some(b)) if !util::fits_in_frame(b.len()) => {
+                            warn!(
+                                "storage_get_raw: the {} bytes of {key} don't fit in \
+                                 SCCACHE_MAX_FRAME_LENGTH, treating it as a miss",
+                                b.len()
+                            );
+                            Response::StorageGetRaw(None)
+                        }
                         Ok(opt) => Response::StorageGetRaw(opt.map(|b| b.to_vec())),
                         Err(e) => {
                             warn!("storage_get_raw error: {e:#}");
@@ -1211,15 +1219,9 @@ where
     where
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let mut builder = length_delimited::Builder::new();
-        if let Ok(max_frame_length_str) = env::var("SCCACHE_MAX_FRAME_LENGTH") {
-            if let Ok(max_frame_length) = max_frame_length_str.parse::<usize>() {
-                builder.max_frame_length(max_frame_length);
-            } else {
-                warn!("Content of SCCACHE_MAX_FRAME_LENGTH is not a valid number, using default");
-            }
-        }
-        let io = builder.new_framed(socket);
+        let io = length_delimited::Builder::new()
+            .max_frame_length(util::max_frame_length())
+            .new_framed(socket);
 
         let (sink, mut stream) = SccacheTransport {
             inner: Framed::new(io.sink_err_into().err_into(), BincodeCodec),
@@ -1239,7 +1241,7 @@ where
         // dropping it aborts this task and its in-flight compile subtasks. That
         // is the cancellation we want once the client disconnects and the reader
         // loop below exits.
-        let _handle = util::spawn(async move {
+        let mut handle = util::spawn(async move {
             while let Some(req) = reqs_rx.recv().await {
                 match util::spawn(me.clone().call(req)).await?? {
                     Message::WithoutBody(message) => {
@@ -1262,13 +1264,21 @@ where
         });
 
         // Read requests until the client disconnects (stream ends) or the
-        // stream errors. A send error means the handler task above has ended,
-        // so we stop reading in that case too.
-        while let Some(req) = stream.next().await {
-            reqs_tx.send(req?)?;
+        // stream errors. Stop as well when the handler task above ends, which
+        // it only does early when it fails to send a response: the client is
+        // waiting for that response, and dropping the connection tells it
+        // there won't be one, where reading on would leave both sides waiting
+        // on each other.
+        let read = async {
+            while let Some(req) = stream.next().await {
+                reqs_tx.send(req?)?;
+            }
+            Ok(())
+        };
+        tokio::select! {
+            res = read => res,
+            res = &mut handle => res.context("connection handler panicked")?,
         }
-
-        Ok(())
     }
 
     /// Get dist status.
