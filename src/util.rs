@@ -61,6 +61,30 @@ pub fn fits_in_frame(len: usize) -> bool {
     len.saturating_add(1024) <= max_frame_length()
 }
 
+/// Write a cache entry too large for a message to a file of its own, for the
+/// other side of the connection to [`take_temp_entry`].
+pub fn write_temp_entry(data: &[u8]) -> Result<PathBuf> {
+    let mut file = tempfile::Builder::new()
+        .prefix("sccache-entry-")
+        .tempfile()
+        .context("failed to create a file for a cache entry")?;
+    file.write_all(data)
+        .context("failed to write a cache entry to a file")?;
+    let (_, path) = file
+        .keep()
+        .context("failed to keep the file of a cache entry")?;
+    Ok(path)
+}
+
+/// Read and remove the file [`write_temp_entry`] wrote.
+pub fn take_temp_entry(path: &Path) -> Result<Vec<u8>> {
+    let data = fs::read(path);
+    if let Err(e) = fs::remove_file(path) {
+        warn!("failed to remove {}: {e}", path.display());
+    }
+    data.with_context(|| format!("failed to read the cache entry in {}", path.display()))
+}
+
 /// Reads `reader` to the end, passing each chunk read to `f`.
 ///
 /// Goes through `std::io::copy`, whose buffer lives on the stack and is not

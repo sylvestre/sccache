@@ -503,7 +503,16 @@ fn test_cli_rmeta_notification_delivery_after_daemon_disconnect() {
 
 /// A storage whose entries are all too large to send to a client-side mode
 /// process in one message.
-struct OversizedStorage;
+#[derive(Default)]
+struct OversizedStorage {
+    /// The length of the last entry stored with `put_raw`.
+    put_raw_len: std::sync::Mutex<Option<usize>>,
+}
+
+/// The length of the entries of [`OversizedStorage`].
+fn oversized_len() -> usize {
+    crate::util::max_frame_length() + 1
+}
 
 #[async_trait::async_trait]
 impl crate::cache::Storage for OversizedStorage {
@@ -518,16 +527,17 @@ impl crate::cache::Storage for OversizedStorage {
         Ok(Duration::ZERO)
     }
     async fn get_raw(&self, _key: &str) -> crate::errors::Result<Option<bytes::Bytes>> {
-        Ok(Some(vec![0; crate::util::max_frame_length()].into()))
+        Ok(Some(vec![7; oversized_len()].into()))
+    }
+    async fn put_raw(&self, _key: &str, data: bytes::Bytes) -> crate::errors::Result<Duration> {
+        *self.put_raw_len.lock().unwrap() = Some(data.len());
+        Ok(Duration::ZERO)
     }
     async fn get_preprocessor_cache_entry(
         &self,
         _key: &str,
     ) -> crate::errors::Result<Option<Box<dyn crate::lru_disk_cache::ReadSeek>>> {
-        Ok(Some(Box::new(Cursor::new(vec![
-            0;
-            crate::util::max_frame_length()
-        ]))))
+        Ok(Some(Box::new(Cursor::new(vec![0; oversized_len()]))))
     }
     fn location(&self) -> String {
         "Oversized Storage".to_string()
@@ -546,7 +556,9 @@ impl crate::cache::Storage for OversizedStorage {
     }
 }
 
-fn run_oversized_server_thread() -> (
+fn run_oversized_server_thread(
+    storage: Arc<OversizedStorage>,
+) -> (
     crate::net::SocketAddr,
     Sender<ServerMessage>,
     thread::JoinHandle<()>,
@@ -560,7 +572,7 @@ fn run_oversized_server_thread() -> (
             runtime,
             Client::new(),
             DistClientContainer::new_disabled(),
-            Arc::new(OversizedStorage),
+            storage,
             CacheMode::ReadWrite,
         )
         .unwrap();
@@ -590,30 +602,47 @@ fn request_with_timeout(
 }
 
 #[test]
-fn test_storage_get_raw_too_large_for_a_message_is_a_miss() {
-    let (addr, sender, child) = run_oversized_server_thread();
-    let conn = connect_to_server(&addr).unwrap();
-    let (conn, resp) = request_with_timeout(
-        conn,
-        crate::protocol::Request::StorageGetRaw {
-            key: "key".to_owned(),
-        },
-    );
-    assert!(matches!(
-        resp.unwrap(),
-        crate::protocol::Response::StorageGetRaw(None)
-    ));
-    // The connection still works.
-    let (conn, resp) = request_with_timeout(conn, crate::protocol::Request::GetStats);
-    assert!(matches!(resp.unwrap(), crate::protocol::Response::Stats(_)));
-    drop(conn);
+fn test_client_side_storage_of_entries_too_large_for_a_message() {
+    use crate::cache::Storage;
+
+    let storage = Arc::new(OversizedStorage::default());
+    let (addr, sender, child) = run_oversized_server_thread(storage.clone());
+    let ipc =
+        crate::cache::ipc_storage::IpcStorage::connect(connect_to_server(&addr).unwrap()).unwrap();
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async {
+        let timeout = Duration::from_secs(30);
+        let data = tokio::time::timeout(timeout, ipc.get_raw("key"))
+            .await
+            .expect("the daemon neither responded nor closed the connection")
+            .unwrap()
+            .unwrap();
+        assert_eq!(oversized_len(), data.len());
+        assert!(data.iter().all(|&b| b == 7));
+
+        tokio::time::timeout(timeout, ipc.put_raw("key", vec![9; oversized_len()].into()))
+            .await
+            .expect("the daemon neither responded nor closed the connection")
+            .unwrap();
+        assert_eq!(Some(oversized_len()), *storage.put_raw_len.lock().unwrap());
+
+        // The connection still works.
+        assert!(
+            tokio::time::timeout(timeout, ipc.get_raw("key"))
+                .await
+                .unwrap()
+                .unwrap()
+                .is_some()
+        );
+    });
+    drop(ipc);
     sender.send(ServerMessage::Shutdown).ok().unwrap();
     child.join().unwrap();
 }
 
 #[test]
 fn test_daemon_closes_the_connection_when_a_response_fails_to_send() {
-    let (addr, sender, child) = run_oversized_server_thread();
+    let (addr, sender, child) = run_oversized_server_thread(Arc::default());
     let conn = connect_to_server(&addr).unwrap();
     // A response the daemon can't send, but still tries to.
     let (conn, resp) = request_with_timeout(

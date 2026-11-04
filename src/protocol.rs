@@ -4,6 +4,7 @@ use crate::config::PreprocessorCacheModeConfig;
 use crate::server::{DistInfo, ServerInfo, ServerStats};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 /// A client request.
 #[derive(Serialize, Deserialize, Debug)]
@@ -39,6 +40,9 @@ pub enum Request {
     /// hasn't yet. Only the executable, working directory, arguments and
     /// environment are used.
     CompilerInfo(Compile),
+    /// Store the raw (zip) bytes in the file at `path` under `key`, for an
+    /// entry too large to send as `StoragePutRaw`. The daemon removes the file.
+    StoragePutRawFile { key: String, path: PathBuf },
 }
 
 /// A server response.
@@ -83,6 +87,10 @@ pub enum Response {
     /// Response for `Request::CompilerInfo`: `None` when the compiler could
     /// not be detected or cannot be sent to another process.
     CompilerInfo(Option<CompilerDescriptor>),
+    /// Response for `Request::StorageGetRaw` on a hit too large to send as
+    /// `StorageGetRaw`: the file holding the raw (zip) bytes, which the client
+    /// removes.
+    StorageGetRawFile(PathBuf),
 }
 
 /// Possible responses from the server for a `Compile` request.

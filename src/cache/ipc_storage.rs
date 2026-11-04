@@ -116,24 +116,47 @@ impl Storage for IpcStorage {
             .await?;
         match resp {
             Response::StorageGetRaw(opt) => Ok(opt.map(Bytes::from)),
+            Response::StorageGetRawFile(path) => {
+                let data = tokio::task::spawn_blocking(move || crate::util::take_temp_entry(&path))
+                    .await
+                    .context("spawn_blocking panicked")??;
+                Ok(Some(data.into()))
+            }
             other => bail!("IpcStorage::get_raw: unexpected response: {other:?}"),
         }
     }
 
     async fn put_raw(&self, key: &str, data: Bytes) -> Result<Duration> {
-        // The daemon would drop the connection on a message it can't take.
-        if !crate::util::fits_in_frame(data.len()) {
-            bail!(
-                "IpcStorage::put_raw: the {} bytes of {key} don't fit in SCCACHE_MAX_FRAME_LENGTH",
-                data.len()
-            );
-        }
-        let resp = self
-            .rpc(Request::StoragePutRaw {
+        // The daemon would drop the connection on a message it can't take, so
+        // hand it a file instead.
+        let req = if crate::util::fits_in_frame(data.len()) {
+            Request::StoragePutRaw {
                 key: key.to_owned(),
                 data: data.to_vec(),
-            })
-            .await?;
+            }
+        } else {
+            let path = tokio::task::spawn_blocking(move || crate::util::write_temp_entry(&data))
+                .await
+                .context("spawn_blocking panicked")??;
+            Request::StoragePutRawFile {
+                key: key.to_owned(),
+                path,
+            }
+        };
+        let file = match &req {
+            Request::StoragePutRawFile { path, .. } => Some(path.clone()),
+            _ => None,
+        };
+        let resp = match self.rpc(req).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                // The daemon removes the file once it gets the request.
+                if let Some(path) = file {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(e);
+            }
+        };
         match resp {
             Response::StoragePutRaw(Ok(())) => Ok(Duration::ZERO),
             Response::StoragePutRaw(Err(e)) => bail!("IpcStorage::put_raw: daemon error: {e}"),

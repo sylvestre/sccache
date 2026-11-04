@@ -1025,12 +1025,17 @@ where
                     debug!("handle_client: storage_get_raw key={}", key);
                     let resp = match me.storage.get_raw(&key).await {
                         Ok(Some(b)) if !util::fits_in_frame(b.len()) => {
-                            warn!(
-                                "storage_get_raw: the {} bytes of {key} don't fit in \
-                                 SCCACHE_MAX_FRAME_LENGTH, treating it as a miss",
-                                b.len()
-                            );
-                            Response::StorageGetRaw(None)
+                            match tokio::task::spawn_blocking(move || util::write_temp_entry(&b))
+                                .await
+                                .context("spawn_blocking panicked")
+                                .and_then(|r| r)
+                            {
+                                Ok(path) => Response::StorageGetRawFile(path),
+                                Err(e) => {
+                                    warn!("storage_get_raw: {key} is too large to send: {e:#}");
+                                    Response::StorageGetRaw(None)
+                                }
+                            }
                         }
                         Ok(opt) => Response::StorageGetRaw(opt.map(|b| b.to_vec())),
                         Err(e) => {
@@ -1088,6 +1093,20 @@ where
                     debug!("handle_client: record_stats");
                     me.merge_stats(*delta).await;
                     Ok(Message::WithoutBody(Response::RecordStats))
+                }
+                Request::StoragePutRawFile { key, path } => {
+                    debug!("handle_client: storage_put_raw_file key={}", key);
+                    let result = async {
+                        let data =
+                            tokio::task::spawn_blocking(move || util::take_temp_entry(&path))
+                                .await
+                                .context("spawn_blocking panicked")??;
+                        me.storage.put_raw(&key, data.into()).await
+                    }
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:#}"));
+                    Ok(Message::WithoutBody(Response::StoragePutRaw(result)))
                 }
                 Request::CompilerInfo(compile) => {
                     debug!("handle_client: compiler_info");
