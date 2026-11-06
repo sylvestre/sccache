@@ -944,6 +944,15 @@ pub fn max_frame_length() -> usize {
     parse_max_frame_length(env::var("SCCACHE_MAX_FRAME_LENGTH").ok())
 }
 
+/// Room left in a frame for what wraps a cache entry: the bincoded message,
+/// the key and the encoding's own bytes. Far more than those need.
+pub const FRAME_RESERVE: usize = 4096;
+
+/// Whether a message carrying `len` bytes of payload fits a frame of `limit`.
+pub fn fits_in_frame(len: usize, limit: usize) -> bool {
+    len <= limit.saturating_sub(FRAME_RESERVE)
+}
+
 fn parse_max_frame_length(value: Option<String>) -> usize {
     /// Comfortably above any plausible cache entry.
     const DEFAULT: usize = 1024 * 1024 * 1024;
@@ -959,6 +968,40 @@ fn parse_max_frame_length(value: Option<String>) -> usize {
         Err(_) => {
             warn!("Content of SCCACHE_MAX_FRAME_LENGTH is not a valid number, using default");
             DEFAULT
+        }
+    }
+}
+
+/// The response to a `StorageGetRaw` hit on `bytes`, under a frame limit of `limit`.
+///
+/// An entry that doesn't fit the frame would take the connection down with it,
+/// so it goes through a file instead. If that fails, report a miss: the client
+/// recompiles, which is what an unreadable entry leaves it doing anyway.
+/// Backends that expose a local path (the disk cache) never come through here.
+async fn raw_entry_response(key: &str, bytes: bytes::Bytes, limit: usize) -> Response {
+    if fits_in_frame(bytes.len(), limit) {
+        return Response::StorageGetRaw(Some(bytes.to_vec()));
+    }
+    let len = bytes.len();
+    match tokio::task::spawn_blocking(move || util::write_temp_entry(&bytes))
+        .await
+        .context("spawn_blocking panicked")
+        .and_then(|r| r)
+    {
+        Ok(path) => {
+            debug!(
+                "storage_get_raw: entry for {key} is {len} bytes, over the frame limit of \
+                 {limit}; passing it through {}",
+                path.display()
+            );
+            Response::StorageGetRawFile(path)
+        }
+        Err(e) => {
+            warn!(
+                "storage_get_raw: entry for {key} is {len} bytes, over the frame limit of \
+                 {limit}, and could not be written to a file: {e:#}; reporting a miss"
+            );
+            Response::StorageGetRaw(None)
         }
     }
 }
@@ -1058,22 +1101,10 @@ where
                 Request::StorageGetRaw { key } => {
                     debug!("handle_client: storage_get_raw key={}", key);
                     let resp = match me.storage.get_raw(&key).await {
-                        // Sending this would take the connection down with it,
-                        // costing the client every later RPC. Report a miss: the
-                        // client recompiles, which is what an unreadable entry
-                        // leaves it doing anyway. Backends that expose a local
-                        // path (the disk cache) never come through here.
-                        Ok(Some(bytes)) if bytes.len() > max_frame_length() => {
-                            warn!(
-                                "storage_get_raw: entry for {key} is {} bytes, over the frame \
-                                 limit of {}; reporting a miss. Raise SCCACHE_MAX_FRAME_LENGTH \
-                                 and restart the server to read entries this large.",
-                                bytes.len(),
-                                max_frame_length()
-                            );
-                            Response::StorageGetRaw(None)
+                        Ok(Some(bytes)) => {
+                            raw_entry_response(&key, bytes, max_frame_length()).await
                         }
-                        Ok(opt) => Response::StorageGetRaw(opt.map(|b| b.to_vec())),
+                        Ok(None) => Response::StorageGetRaw(None),
                         Err(e) => {
                             warn!("storage_get_raw error: {e:#}");
                             Response::StorageGetRaw(None)
@@ -1089,6 +1120,20 @@ where
                         .await
                         .map(|_| ())
                         .map_err(|e| format!("{e:#}"));
+                    Ok(Message::WithoutBody(Response::StoragePutRaw(result)))
+                }
+                Request::StoragePutRawFile { key, path } => {
+                    debug!("handle_client: storage_put_raw_file key={}", key);
+                    let result = async {
+                        let data =
+                            tokio::task::spawn_blocking(move || util::take_temp_entry(&path))
+                                .await
+                                .context("spawn_blocking panicked")??;
+                        me.storage.put_raw(&key, data.into()).await
+                    }
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:#}"));
                     Ok(Message::WithoutBody(Response::StoragePutRaw(result)))
                 }
                 Request::StorageGetPreprocessorEntry { key } => {
@@ -2695,6 +2740,22 @@ mod tests {
     use super::*;
     use crate::mock_command::{MockChild, MockCommandCreator, exit_status};
     use crate::test::utils::{TestFixture, next_command, next_command_calls};
+
+    #[test]
+    fn test_raw_entry_response_passes_oversized_entries_through_a_file() {
+        let runtime = Runtime::new().unwrap();
+        let small = bytes::Bytes::from(vec![1; 100]);
+        let resp = runtime.block_on(raw_entry_response("key", small.clone(), 8192));
+        assert!(matches!(resp, Response::StorageGetRaw(Some(data)) if data == small));
+
+        let large = bytes::Bytes::from(vec![2; 8192]);
+        let resp = runtime.block_on(raw_entry_response("key", large.clone(), 8192));
+        let Response::StorageGetRawFile(path) = resp else {
+            panic!("an entry over the frame limit was not passed through a file: {resp:?}");
+        };
+        assert_eq!(util::take_temp_entry(&path).unwrap(), large);
+        assert!(!path.exists(), "the file was not removed once read");
+    }
 
     #[test]
     fn test_default_max_frame_length_fits_a_cache_entry() {
