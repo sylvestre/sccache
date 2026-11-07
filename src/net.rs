@@ -102,7 +102,11 @@ impl Acceptor for tokio::net::TcpListener {
 
     #[inline]
     fn accept(&self) -> impl Future<Output = tokio::io::Result<Self::Socket>> + Send {
-        tokio::net::TcpListener::accept(self).and_then(|(s, _)| futures::future::ok(s))
+        tokio::net::TcpListener::accept(self).and_then(|(s, _)| {
+            // See `connect`: responses carrying a cache entry would otherwise
+            // wait on the client's delayed ACK.
+            futures::future::ready(s.set_nodelay(true).map(|()| s))
+        })
     }
 
     #[inline]
@@ -129,7 +133,14 @@ impl Connection for std::net::TcpStream {
 pub fn connect(addr: &SocketAddr) -> std::io::Result<Box<dyn Connection>> {
     match addr {
         SocketAddr::Net(addr) => {
-            std::net::TcpStream::connect(addr).map(|s| Box::new(s) as Box<dyn Connection>)
+            let stream = std::net::TcpStream::connect(addr)?;
+            // A message is written as a length prefix and then its body. With
+            // Nagle's algorithm, the last segment of a body that spans several
+            // waits for the daemon to ACK the previous ones, which it delays by
+            // up to 40ms on Linux because it has no reply to send yet. Every
+            // cache write in client-side mode paid that.
+            stream.set_nodelay(true)?;
+            Ok(Box::new(stream) as Box<dyn Connection>)
         }
         #[cfg(unix)]
         SocketAddr::Unix(p) => {
