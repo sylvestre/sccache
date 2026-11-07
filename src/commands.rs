@@ -733,6 +733,7 @@ where
 {
     trace!("do_compile_client_side");
     let exe_path = which_in(exe, path, cwd)?;
+    crate::compiler::preprocessor_cache::record_computed_file_digests();
     let storage = IpcStorage::connect(conn)?;
     let cache_mode = runtime.block_on(storage.check())?;
     let conn_arc = storage.conn();
@@ -776,8 +777,24 @@ where
         Err(e) => Err(e),
     };
     let delta: ServerStats = runtime.block_on(service.take_stats());
+    store_file_digests(&conn_arc);
     record_stats(&conn_arc, delta);
     result
+}
+
+/// Hand the daemon the file digests this process computed, so that the next
+/// process checking a preprocessor cache entry does not hash the same files
+/// again. Best effort: a process that fails to only costs the next one time.
+fn store_file_digests(conn: &Mutex<ServerConnection>) {
+    let entries = crate::compiler::preprocessor_cache::take_computed_file_digests();
+    if entries.is_empty() {
+        return;
+    }
+    if let Ok(mut conn) = conn.lock()
+        && let Err(e) = conn.request(Request::StoreFileDigests(entries))
+    {
+        debug!("handing file digests to the daemon failed: {e:#}");
+    }
 }
 
 /// Merge this process' stats into the daemon's running totals.

@@ -63,6 +63,17 @@ pub struct PreprocessorCacheEntry {
 }
 
 impl PreprocessorCacheEntry {
+    /// The files included by any of the results, without duplicates.
+    pub fn include_paths(&self) -> Vec<PathBuf> {
+        let paths: HashSet<PathBuf> = self
+            .results
+            .values()
+            .flatten()
+            .map(|include| PathBuf::from(&include.path))
+            .collect();
+        paths.into_iter().collect()
+    }
+
     pub fn new() -> Self {
         Default::default()
     }
@@ -460,6 +471,73 @@ fn file_digest(
     Digest::reader_sync_time_macros(std::fs::File::open(path)?)
 }
 
+/// What has to be unchanged for a remembered digest to be reused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct FileStat {
+    len: u64,
+    mtime: Option<Timestamp>,
+    ctime: Option<Timestamp>,
+    dev: u64,
+    ino: u64,
+}
+
+/// A digest remembered for a file, with the stat it has to still match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedFileDigest {
+    stat: FileStat,
+    digest: String,
+    found_date: bool,
+    found_time: bool,
+    found_timestamp: bool,
+}
+
+/// The digests this process remembers for `paths`.
+///
+/// In client-side mode the daemon hands these to each CLI process, which would
+/// otherwise start with nothing remembered and re-read every header of a
+/// preprocessor cache entry to check it.
+pub fn remembered_file_digests(paths: &[PathBuf]) -> Vec<(PathBuf, CachedFileDigest)> {
+    #[cfg(unix)]
+    {
+        digest_cache::export(paths)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = paths;
+        Vec::new()
+    }
+}
+
+/// Remember digests computed by another process. Each is still checked
+/// against the file's stat before it is used.
+pub fn remember_file_digests(entries: Vec<(PathBuf, CachedFileDigest)>) {
+    #[cfg(unix)]
+    digest_cache::import(entries);
+    #[cfg(not(unix))]
+    let _ = entries;
+}
+
+/// Start recording the digests this process computes, for
+/// [`take_computed_file_digests`]. Only a client-side CLI process does: the
+/// daemon would record them forever.
+pub fn record_computed_file_digests() {
+    #[cfg(unix)]
+    digest_cache::RECORD_COMPUTED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The digests this process computed itself since the last call, for a CLI
+/// process in client-side mode to hand back to the daemon.
+pub fn take_computed_file_digests() -> Vec<(PathBuf, CachedFileDigest)> {
+    #[cfg(unix)]
+    {
+        digest_cache::take_computed()
+    }
+    #[cfg(not(unix))]
+    {
+        Vec::new()
+    }
+}
+
 #[cfg(unix)]
 mod digest_cache {
     use super::*;
@@ -476,20 +554,43 @@ mod digest_cache {
     /// Bound on the files remembered in [`FILE_DIGESTS`]; it is cleared when reached.
     const MAX_CACHED_FILE_DIGESTS: usize = 100_000;
 
+    /// Files whose digest this process computed and has not handed out yet,
+    /// once [`super::record_computed_file_digests`] was called.
+    static COMPUTED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    pub(super) static RECORD_COMPUTED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    fn insert(path: PathBuf, cached: CachedFileDigest) {
+        let mut digests = FILE_DIGESTS.lock().unwrap_or_else(|e| e.into_inner());
+        if digests.len() >= MAX_CACHED_FILE_DIGESTS {
+            digests.clear();
+        }
+        digests.insert(path, cached);
+    }
+
+    pub(super) fn export(paths: &[PathBuf]) -> Vec<(PathBuf, CachedFileDigest)> {
+        let digests = FILE_DIGESTS.lock().unwrap_or_else(|e| e.into_inner());
+        paths
+            .iter()
+            .filter_map(|path| Some((path.clone(), digests.get(path)?.clone())))
+            .collect()
+    }
+
+    pub(super) fn import(entries: Vec<(PathBuf, CachedFileDigest)>) {
+        for (path, cached) in entries {
+            insert(path, cached);
+        }
+    }
+
+    pub(super) fn take_computed() -> Vec<(PathBuf, CachedFileDigest)> {
+        let paths = std::mem::take(&mut *COMPUTED.lock().unwrap_or_else(|e| e.into_inner()));
+        export(&paths)
+    }
+
     /// How old a file's mtime and ctime must be for its digest to be remembered.
     /// File timestamps come from a coarse clock, so a file rewritten right after
     /// being hashed can keep the timestamps it was hashed with.
     const MIN_CACHED_FILE_AGE: Duration = Duration::from_secs(2);
-
-    /// What has to be unchanged for a remembered digest to be reused.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct FileStat {
-        len: u64,
-        mtime: Option<Timestamp>,
-        ctime: Option<Timestamp>,
-        dev: u64,
-        ino: u64,
-    }
 
     impl FileStat {
         fn new(meta: &Metadata) -> Self {
@@ -510,15 +611,6 @@ mod digest_cache {
             };
             matches!((self.mtime, self.ctime), (Some(mtime), Some(ctime)) if mtime.max(ctime) < limit.into())
         }
-    }
-
-    #[derive(Debug)]
-    pub(super) struct CachedFileDigest {
-        stat: FileStat,
-        digest: String,
-        found_date: bool,
-        found_time: bool,
-        found_timestamp: bool,
     }
 
     /// The digest remembered for `path`, if the file has not changed since.
@@ -564,11 +656,7 @@ mod digest_cache {
         let (digest, finder) = Digest::reader_sync_time_macros(&file)?;
         // Not remembered if it changed while being read.
         if stat.is_settled(now) && FileStat::new(&file.metadata()?) == stat {
-            let mut digests = FILE_DIGESTS.lock().unwrap_or_else(|e| e.into_inner());
-            if digests.len() >= MAX_CACHED_FILE_DIGESTS {
-                digests.clear();
-            }
-            digests.insert(
+            insert(
                 path.to_owned(),
                 CachedFileDigest {
                     stat,
@@ -578,6 +666,12 @@ mod digest_cache {
                     found_timestamp: finder.found_timestamp(),
                 },
             );
+            if RECORD_COMPUTED.load(std::sync::atomic::Ordering::Relaxed) {
+                COMPUTED
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(path.to_owned());
+            }
         }
         Ok((digest, finder))
     }
@@ -1125,6 +1219,45 @@ mod test {
             Digest::reader_sync(&b"#define B __TIME__\n"[..]).unwrap()
         );
         assert!(new_finder.found_time() && !new_finder.found_date());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_file_digests_handed_to_another_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("handed.h");
+        std::fs::write(&path, b"int handed;\n").unwrap();
+        let later = SystemTime::now() + Duration::from_secs(60);
+
+        record_computed_file_digests();
+        let (digest, _) = file_digest_at(&path, None, later).unwrap();
+        let computed = take_computed_file_digests();
+        let entry = computed
+            .iter()
+            .find(|(p, _)| p == &path)
+            .expect("the digest was not recorded as computed")
+            .clone();
+        assert!(
+            !take_computed_file_digests().iter().any(|(p, _)| p == &path),
+            "a computed digest was handed out twice"
+        );
+
+        // What another process gets over IPC, into a cache that has never seen
+        // the file.
+        let wire: Vec<(PathBuf, CachedFileDigest)> =
+            bincode::deserialize(&bincode::serialize(&vec![entry]).unwrap()).unwrap();
+        FILE_DIGESTS.lock().unwrap().remove(&path);
+        assert!(remembered_file_digests(std::slice::from_ref(&path)).is_empty());
+        remember_file_digests(wire);
+        assert_eq!(
+            remembered_file_digests(std::slice::from_ref(&path)).len(),
+            1
+        );
+        assert_eq!(file_digest_at(&path, None, later).unwrap().0, digest);
+
+        // A digest handed over is still checked against the file.
+        rewrite_with_new_ctime(&path, b"int change;\n");
+        assert_ne!(file_digest_at(&path, None, later).unwrap().0, digest);
     }
 
     #[test]

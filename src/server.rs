@@ -1127,6 +1127,13 @@ where
                         .map_err(|e| format!("{e:#}"));
                     Ok(Message::WithoutBody(Response::StoragePutRaw(result)))
                 }
+                Request::FileDigests { paths } => Ok(Message::WithoutBody(Response::FileDigests(
+                    crate::compiler::preprocessor_cache::remembered_file_digests(&paths),
+                ))),
+                Request::StoreFileDigests(entries) => {
+                    crate::compiler::preprocessor_cache::remember_file_digests(entries);
+                    Ok(Message::WithoutBody(Response::StoreFileDigests))
+                }
                 Request::StoragePutRawFile { key, path } => {
                     debug!("handle_client: storage_put_raw_file key={}", key);
                     let result = async {

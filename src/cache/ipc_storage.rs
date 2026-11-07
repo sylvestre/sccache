@@ -70,6 +70,23 @@ impl IpcStorage {
             .context("spawn_blocking panicked")?
     }
 
+    /// Remember the digests the daemon has for the files the preprocessor cache
+    /// entry in `bytes` includes. Checking the entry would otherwise re-read and
+    /// re-hash every one of them, the daemon's digests being out of reach of a
+    /// CLI process. Best effort: without them, the files are hashed here.
+    async fn fetch_file_digests(&self, bytes: &[u8]) {
+        let Ok(entry) = PreprocessorCacheEntry::read(bytes) else {
+            return;
+        };
+        let paths = entry.include_paths();
+        if paths.is_empty() {
+            return;
+        }
+        if let Ok(Response::FileDigests(entries)) = self.rpc(Request::FileDigests { paths }).await {
+            crate::compiler::preprocessor_cache::remember_file_digests(entries);
+        }
+    }
+
     /// Refuse a payload the daemon's transport would reject.
     ///
     /// A frame over the daemon's limit doesn't just fail its own request: the
@@ -222,9 +239,12 @@ impl Storage for IpcStorage {
             .await?;
         match resp {
             Response::StorageGetPreprocessorEntry(Ok(None)) => Ok(None),
-            Response::StorageGetPreprocessorEntry(Ok(Some(bytes))) => Ok(Some(
-                Box::new(Cursor::new(bytes)) as Box<dyn crate::lru_disk_cache::ReadSeek>,
-            )),
+            Response::StorageGetPreprocessorEntry(Ok(Some(bytes))) => {
+                self.fetch_file_digests(&bytes).await;
+                Ok(Some(
+                    Box::new(Cursor::new(bytes)) as Box<dyn crate::lru_disk_cache::ReadSeek>
+                ))
+            }
             Response::StorageGetPreprocessorEntry(Err(e)) => {
                 bail!("IpcStorage::get_preprocessor_cache_entry: {e}")
             }
