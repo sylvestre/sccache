@@ -308,3 +308,6 @@ ptr_as_ptr = "warn"
 ref_option = "warn"
 semicolon_if_nothing_returned = "warn"
 unnecessary_semicolon = "warn"
+
+[patch.crates-io]
+reqsign-core = { path = "patches/reqsign-core" }
