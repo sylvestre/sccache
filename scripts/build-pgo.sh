@@ -18,6 +18,11 @@
 # Usage:
 #   scripts/build-pgo.sh [--target TRIPLE] [--target-dir DIR] [--features LIST]
 #                        [--train-only] [--bench] [--llvm-profdata PATH]
+#                        [--remote-env FILE]
+#
+# --remote-env FILE: a file of SCCACHE_*=value lines configuring a remote cache
+# backend (GCS, S3, WebDAV...). The corpus then also runs against it, with
+# clang-cl and rustc, so that the storage and HTTP code is trained too.
 
 set -euo pipefail
 
@@ -36,6 +41,7 @@ TARGET=""
 TRAIN_ONLY=0
 BENCH=0
 LLVM_PROFDATA=""
+REMOTE_ENV=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -44,6 +50,7 @@ while [ $# -gt 0 ]; do
         --features) FEATURES="$2"; shift 2 ;;
         --llvm-profdata) LLVM_PROFDATA="$2"; shift 2 ;;
         --train-only) TRAIN_ONLY=1; shift ;;
+        --remote-env) REMOTE_ENV="$2"; shift 2 ;;
         --bench) BENCH=1; shift ;;
         -h|--help) sed -n '3,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -324,6 +331,89 @@ printf '#define COMMON_SEED 11\n' > "${SRC}/common.h"
 echo "C/C++ (direct mode, header changed)"
 c_workloads direct-3
 unset SCCACHE_DIRECT
+
+if [ -n "$REMOTE_ENV" ]; then
+    "$BIN" --stop-server >/dev/null 2>&1 || true
+    set -a
+    # shellcheck disable=SC1090
+    . "$REMOTE_ENV"
+    set +a
+    if ! "$BIN" --start-server; then
+        echo "cannot start sccache with the remote backend from ${REMOTE_ENV}" >&2
+        exit 1
+    fi
+    echo "C/C++ (remote, preprocessor mode, miss)"
+    c_workloads remote-miss
+    echo "C/C++ (remote, preprocessor mode, hit)"
+    c_workloads remote-hit
+
+    CLANG_CL_BIN="$(find_tool "" "$(dirname "${CC_BIN:-/nonexistent}")/clang-cl" clang-cl || true)"
+    if [ -n "$CLANG_CL_BIN" ]; then
+        echo "clang-cl: ${CLANG_CL_BIN}"
+        # No system headers: the build host has no Windows SDK.
+        for ((i = 0; i < N_SOURCES; i++)); do
+            {
+                printf '#include "common.h"\n'
+                printf 'static int cl_table_%d[] = {' "$i"
+                for ((j = 0; j < 64; j++)); do printf '%d,' $(((i * 13 + j * 7) % 1000)); done
+                printf '};\n'
+                printf 'int cl_func_%d(const char *s, int n) {\n' "$i"
+                printf '    int acc = COMMON_SEED;\n'
+                printf '    for (int k = 0; k < n; k++) acc += s[k] * cl_table_%d[k %% 64];\n' "$i"
+                printf '    return acc;\n}\n'
+            } > "${SRC}/cl${i}.c"
+        done
+        for pass in miss hit; do
+            echo "clang-cl (remote, ${pass})"
+            for flags in "-O2 -MD" "-Od -Z7 -W3"; do
+                out="${WORK}/obj/cl-${pass}-${flags// /}"
+                mkdir -p "$out"
+                for ((i = 0; i < N_SOURCES; i++)); do
+                    # shellcheck disable=SC2086
+                    "$BIN" "$CLANG_CL_BIN" -nologo -c "${SRC}/cl${i}.c" -Fo"${out}/cl${i}.obj" \
+                        -I"$SRC" $flags >/dev/null 2>&1 || true
+                done
+            done
+        done
+    fi
+
+    # A cargo workspace without external dependencies, so it builds offline.
+    RUST_WS="${WORK}/rust"
+    N_CRATES=12
+    mkdir -p "$RUST_WS"
+    {
+        printf '[workspace]\nresolver = "2"\nmembers = ['
+        for ((i = 0; i < N_CRATES; i++)); do printf '"c%d",' "$i"; done
+        printf ']\n'
+    } > "${RUST_WS}/Cargo.toml"
+    for ((i = 0; i < N_CRATES; i++)); do
+        mkdir -p "${RUST_WS}/c${i}/src"
+        {
+            printf '[package]\nname = "c%d"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\n' "$i"
+            if [ "$i" -gt 0 ]; then printf 'c%d = { path = "../c%d" }\n' $((i - 1)) $((i - 1)); fi
+        } > "${RUST_WS}/c${i}/Cargo.toml"
+        {
+            printf 'use std::collections::HashMap;\n'
+            printf 'pub fn f%d(v: &[String]) -> usize {\n' "$i"
+            printf '    let mut m: HashMap<&str, usize> = HashMap::new();\n'
+            printf '    for s in v { *m.entry(s.as_str()).or_default() += s.len() * %d; }\n' $((i + 1))
+            if [ "$i" -gt 0 ]; then printf '    m.len() + c%d::f%d(v)\n' $((i - 1)) $((i - 1)); else printf '    m.len()\n'; fi
+            printf '}\n'
+            printf '#[derive(Debug, Clone, PartialEq)]\npub enum E%d { A(u32), B(String), C { x: f64, y: Vec<u8> } }\n' "$i"
+        } > "${RUST_WS}/c${i}/src/lib.rs"
+    done
+    for pass in miss hit; do
+        echo "rustc (remote, ${pass})"
+        (
+            cd "$RUST_WS"
+            unset RUSTFLAGS CARGO_BUILD_RUSTFLAGS
+            export RUSTC_WRAPPER="$BIN" CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="${RUST_WS}/target"
+            cargo clean >/dev/null 2>&1 || true
+            cargo build --release --offline >/dev/null 2>&1 || echo "  cargo build failed"
+            cargo build --offline >/dev/null 2>&1 || echo "  cargo build (debug) failed"
+        )
+    done
+fi
 
 "$BIN" --show-stats || true
 "$BIN" --show-stats --stats-format=json >/dev/null 2>&1 || true
